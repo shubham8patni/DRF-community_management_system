@@ -15,6 +15,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.contrib.auth import logout
+# import redis
+from django.core.cache import cache
+# from django.views.decorators.cache import cache_page
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 # from rest_framework.authtoken.models import Token # DRF in built basic authenctication
 
 # import requests
@@ -69,9 +74,10 @@ class UpdateUserProfile(generics.UpdateAPIView):
 
     def partial_update(self, request, mobile_number):
         not_allowed_groups = []
-        if request.data['groups'][0] not in not_allowed_groups:
+        if True: #request.data['groups'][0] not in not_allowed_groups:
             user_instance = MyUser.objects.get(mobile_number = mobile_number)
-            group_name = request.data.pop('groups')
+            if request.data.pop('groups'):
+                group_name = request.data.pop('groups')
             
             if user_instance.groups.all().exists():
                 # request.data['groups'] = [group.id for group in user_instance.groups.all()]
@@ -79,6 +85,7 @@ class UpdateUserProfile(generics.UpdateAPIView):
             else:
                 group_instance = Group.objects.get(name = group_name[0])
                 user_instance.groups.add(group_instance)
+                cache.delete(f"custom_cache_/community_admin/userslist/{group_instance.name}")
                 # request.data['groups'] = [group_instance.id]
             
             serialized_data = UpdateUserProfileSerializer(user_instance, data = request.data, partial=True)
@@ -112,6 +119,14 @@ class CreateHeadAddress(generics.CreateAPIView):
     queryset = MyUserHeadAddress.objects.all()
     http_method_names = ['post']
     # permission_classes = [AddmemberPermission]
+
+    def dispatch(self, *args, **kwargs):
+        cache.delete("custom_cache_/community_admin/userslist/unverified_resident")
+        cache.delete("custom_cache_/community_admin/userslist/verified_resident")
+        cache.delete("custom_cache_/community_admin/userslist/unverified_guard")
+        cache.delete("custom_cache_/community_admin/userslist/verified_guard")
+        return super().dispatch(*args, **kwargs)
+    
 
 
 
@@ -184,7 +199,6 @@ class AddFamilyMembers(views.APIView):
             status=status.HTTP_400_BAD_REQUEST
             )
 
-       
 
 class GetMyUserProfile(generics.RetrieveAPIView):
     # authentication_classes = [JWTAuthentication]
@@ -193,6 +207,36 @@ class GetMyUserProfile(generics.RetrieveAPIView):
     lookup_field = "mobile_number"
     serializer_class = GetMyUserProfileSerializer
     queryset = MyUser.objects.all()
+
+    @custom_cache_page(3600)  # Cache for 1 minute
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+
+# manual redis method
+# class GetMyUserProfile(generics.RetrieveAPIView):
+#     # authentication_classes = [JWTAuthentication]
+#     # permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
+#     model = MyUser
+#     lookup_field = "mobile_number"
+#     serializer_class = GetMyUserProfileSerializer
+#     # queryset = MyUser.objects.all()
+
+#     def get_queryset(self):
+#         # Check if the user profile is cached
+#         cached_profile = redis.get(f'profile_{self.kwargs["mobile_number"]}')
+#         if cached_profile:
+#             return [cached_profile]
+        
+#         # If not cached, retrieve from the database
+#         queryset = MyUser.objects.filter(mobile_number = self.kwargs["mobile_number"])
+#         if queryset.exists():
+#             # Cache the user profile for a certain period (e.g., 3600 seconds = 1 hour)
+#             redis.set(f'profile_{self.kwargs["mobile_number"]}', queryset[0], 3600)
+#             return queryset
+#         else:
+#             return []
+        
 
 
 class LoginUser(views.APIView):

@@ -8,6 +8,11 @@ from users_manipulation.serializers import GetMyUserProfileSerializer
 from .serializers import ViewUserListSerializer, VerifyMyuserInputSerializer
 from .permissions import AdminOnlyPermission
 from django.db.models import Q, F
+from django.core.cache import cache
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
+from .helper import custom_cache_page
+
 
 # Create your views here.
 # class GetMyUserList(views.APIView):
@@ -47,14 +52,19 @@ class GetMyUserList(generics.ListAPIView):
     serializer_class = ViewUserListSerializer
     lookup_field = "groups"
 
+    @custom_cache_page(3600)  # Cache for 1 minute # Cache for 1 minute
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
     def get_queryset(self):
         group = self.kwargs['groups']
         if group == "unverified_guard" or group == "verified_guard" :
             queryset = MyUser.objects.filter(groups__name = group)
-        elif group == "unverified_resident":
+        elif group == "unverified_resident" or group == "verified_resident":
             queryset = MyUser.objects.filter(groups__name=group, myuserheadaddress__complete_address__isnull=False).annotate(complete_address=F('myuserheadaddress__complete_address')).values('mobile_number', 'first_name', 'complete_address')
         else:
-            queryset = "Error"
+            # cache.delete(f"custom_cache_/community_admin/userslist/{group}")
+            queryset = MyUser.objects.none()
         return queryset
     
 
@@ -80,12 +90,16 @@ class VerifyMyUser(views.APIView):
             user_info.groups.clear()
             # user_info.groups.remove(user_group[0].id)
             user_info.groups.add(new_group, new_group2)
+            cache.delete("custom_cache_/community_admin/userslist/unverified_resident")
+            cache.delete("custom_cache_/community_admin/userslist/verified_resident")
         elif 'unverified_guard' in  user_group_list:
             new_group = Group.objects.get(name = "verified_guard")
             # Clear all groups assigned to the user
             user_info.groups.clear()
             # user_info.groups.remove(user_group)
             user_info.groups.add(new_group, new_group2)
+            cache.delete("custom_cache_/community_admin/userslist/unverified_guard")
+            cache.delete("custom_cache_/community_admin/userslist/verified_guard")
         else:
             return Response({
                 "status" : 401,
@@ -107,11 +121,12 @@ class MyUserVerify(generics.RetrieveUpdateAPIView):
     http_method_names = ['get', 'patch']
 
     def patch(self, request, mobile_number):
-        if request.user.groups.filter(name = "unverified_resident").exists():
+        user_instance = MyUser.objects.get(mobile_number = mobile_number)
+        if user_instance.groups.filter(name = "unverified_resident").exists():
             # return Response(str(request.user.groups.filter(name = "unverified_resident").exists))
             group1 = Group.objects.get(name = "verified_resident")
             group2 = Group.objects.get(name = "family_head")
-        elif request.user.groups.filter(name = "unverified_guard").exists():
+        elif user_instance.groups.filter(name = "unverified_guard").exists():
             group1 = Group.objects.get(name = "verified_guard")
             group2 = None
         else:
@@ -119,7 +134,7 @@ class MyUserVerify(generics.RetrieveUpdateAPIView):
                 "status" : 401,
                 "error" : "invalid group"
             })
-        user_instance = MyUser.objects.get(mobile_number = mobile_number)
+        # user_instance = MyUser.objects.get(mobile_number = mobile_number)
         user_instance.groups.clear()
         user_instance.groups.add(group1, group2)
         user_instance_serialized = GetMyUserProfileSerializer(user_instance)
